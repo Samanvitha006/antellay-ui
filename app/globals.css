@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+body {
+  background-color: #050B14;
+  color: #cbd5e1;
+}
+
+@import "tailwindcss";
+
+body {
+  background-color: #030712;
+  color: #cbd5e1;
+}
+
+/* Compact Command Center Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #060D1A;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #152338;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #00e5ff;
+}
