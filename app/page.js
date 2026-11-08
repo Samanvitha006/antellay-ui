@@ -105,9 +105,7 @@ export default function AegisDashboard() {
     }
   };
 
- 
-
-    const runAnalysis = async () => {
+  const runAnalysis = async () => {
     setIsAnalyzing(true);
     // Removes trailing slash if present
     const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
@@ -179,28 +177,6 @@ export default function AegisDashboard() {
     }
   };
 
-        // Update live metrics dynamically based on payload
-        const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
-        setMetrics((prev) => ({
-          ...prev,
-          anomalyScore: (anomalyCount / formatted.length).toFixed(2),
-          confidence: '96%',
-          affectedSubsystem: dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER',
-          detectedSequences: `${anomalyCount}/${anomalyCount > 0 ? anomalyCount : 1}`,
-          ...(res.metrics && {
-            f1: res.metrics.f1 ? `${(res.metrics.f1 * 100).toFixed(1)}%` : prev.f1,
-            detectionDelay: res.metrics.mean_detection_delay ? `${res.metrics.mean_detection_delay} steps` : prev.detectionDelay,
-          }),
-        }));
-      }
-    } catch (err) {
-      console.error('Telemetry Pipeline Request Failed:', err);
-      alert('Inference server connection failed on port 8080. Displaying local cache.');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   const navItems = [
     { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
     { id: 'explorer', label: 'Telemetry Explorer', icon: <Radio size={15} /> },
@@ -216,10 +192,9 @@ export default function AegisDashboard() {
 
   return (
     <div className="flex h-screen w-full bg-[#030712] text-slate-300 font-sans overflow-hidden select-none">
-      {/* 1. LEFT DOCK NAVIGATION */}
+      {/* LEFT DOCK NAVIGATION */}
       <aside className="w-56 bg-[#060D1A] border-r border-[#152338] flex flex-col justify-between shrink-0">
         <div>
-          {/* Brand header */}
           <div className="p-4 border-b border-[#152338] flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#0055ff] to-[#00e5ff] flex items-center justify-center font-black text-black text-base shadow-[0_0_12px_rgba(0,229,255,0.4)]">
               A
@@ -230,7 +205,6 @@ export default function AegisDashboard() {
             </div>
           </div>
 
-          {/* Dynamic Navigation Links */}
           <nav className="p-2 flex flex-col gap-1 text-xs">
             {navItems.map((item) => (
               <NavItem
@@ -245,7 +219,6 @@ export default function AegisDashboard() {
           </nav>
         </div>
 
-        {/* System Mode Footer */}
         <div className="p-3 border-t border-[#152338]">
           <div className="bg-[#0A1628] border border-[#1E3A5F] p-2.5 rounded-lg flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
@@ -258,9 +231,8 @@ export default function AegisDashboard() {
         </div>
       </aside>
 
-      {/* 2. MAIN MISSION CENTER */}
+      {/* MAIN MISSION CENTER */}
       <div className="flex-1 flex flex-col h-full min-w-0">
-        {/* TOP STATUS BAR */}
         <header className="h-12 bg-[#060D1A] border-b border-[#152338] px-4 flex items-center justify-between text-xs font-mono shrink-0">
           <div className="flex items-center gap-2 text-slate-400 text-[11px]">
             <span>Mission Intelligence</span>
@@ -273,16 +245,13 @@ export default function AegisDashboard() {
               <Database size={13} className="text-[#00e5ff]" />
               <span>NASA SMAP · {selectedChannel}</span>
             </div>
-
             <div className="flex items-center gap-1.5 bg-amber-950/40 border border-amber-600/50 text-amber-300 px-2.5 py-1 rounded text-[11px]">
               <AlertTriangle size={13} />
               <span>WARNING</span>
             </div>
-
             <div className="bg-[#0A1628] border border-[#1E3A5F] text-slate-300 px-2.5 py-1 rounded text-[11px]">
               DEMO MODE
             </div>
-
             <button className="text-slate-400 hover:text-white p-1">
               <Search size={15} />
             </button>
@@ -296,9 +265,7 @@ export default function AegisDashboard() {
           </div>
         </header>
 
-        {/* WORKSPACE CONTENT BODY */}
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3.5 custom-scrollbar">
-          {/* HEADER INTRO & INGEST CONTROLS */}
           <div className="flex justify-between items-end border-b border-[#152338] pb-3 shrink-0">
             <div>
               <div className="flex items-center gap-2 mb-1">
@@ -362,7 +329,6 @@ export default function AegisDashboard() {
             </div>
           </div>
 
-          {/* 3. SIX HORIZONTAL STATUS SPARKLINES */}
           <div className="grid grid-cols-6 gap-2.5 shrink-0">
             <SparklineCard icon={<Battery size={14} className="text-cyan-400" />} label="BATTERY" value={metrics.battery.val} delta={metrics.battery.change} up={metrics.battery.up} color="#00e5ff" />
             <SparklineCard icon={<Thermometer size={14} className="text-indigo-400" />} label="TEMPERATURE" value={metrics.temperature.val} delta={metrics.temperature.change} up={metrics.temperature.up} color="#818cf8" />
@@ -372,9 +338,7 @@ export default function AegisDashboard() {
             <SparklineCard icon={<Zap size={14} className="text-cyan-400" />} label="VOLTAGE" value={metrics.voltage.val} delta={metrics.voltage.change} up={metrics.voltage.up} color="#00e5ff" />
           </div>
 
-          {/* 4. MID DUAL WORKSPACE: TELEMETRY CHART (LEFT) & ANOMALY DIAGNOSIS (RIGHT) */}
           <div className="grid grid-cols-12 gap-3 shrink-0">
-            {/* LEFT 8 COLS: Telemetry Signal Analysis */}
             <div className="col-span-8 bg-[#060D1A] border border-[#152338] rounded-xl p-3.5 flex flex-col">
               <div className="flex items-center justify-between mb-2">
                 <div>
@@ -409,14 +373,12 @@ export default function AegisDashboard() {
                 </div>
               </div>
 
-              {/* Chart Legend Indicators */}
               <div className="flex items-center gap-4 text-[10px] font-mono text-slate-400 mb-2">
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 bg-[#00e5ff]"></span> Normal Signal</span>
                 <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pink-500 shadow-[0_0_6px_#ec4899]"></span> Detected Anomaly</span>
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 border-t border-dashed border-red-500"></span> Spec Threshold</span>
               </div>
 
-              {/* Interactive Telemetry Canvas */}
               <div className="h-64 w-full relative">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={displayedChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -438,7 +400,6 @@ export default function AegisDashboard() {
               </div>
             </div>
 
-            {/* RIGHT 4 COLS: AI Anomaly Detection Card */}
             <div className="col-span-4 bg-[#060D1A] border border-[#152338] rounded-xl p-3.5 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2 border-b border-[#152338]">
@@ -464,7 +425,6 @@ export default function AegisDashboard() {
                   </span>
                 </div>
 
-                {/* Quantitative Sub-Metrics */}
                 <div className="mt-3 flex flex-col gap-2 font-mono text-xs">
                   <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
                     <span className="text-slate-400 text-[11px]">Primary Symptom</span>
@@ -484,7 +444,6 @@ export default function AegisDashboard() {
                   </div>
                 </div>
 
-                {/* Mini sparkline visualization */}
                 <div className="mt-3 h-14 bg-[#030712] rounded border border-[#152338] p-1">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={displayedChartData.slice(-18)}>
@@ -504,9 +463,7 @@ export default function AegisDashboard() {
             </div>
           </div>
 
-          {/* 5. FOUR BOTTOM COMPONENT TILES */}
           <div className="grid grid-cols-4 gap-3 shrink-0">
-            {/* Tile 1: Root Cause Analysis */}
             <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
@@ -543,7 +500,6 @@ export default function AegisDashboard() {
               </button>
             </div>
 
-            {/* Tile 2: Predictive Health Gauge */}
             <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
@@ -579,7 +535,6 @@ export default function AegisDashboard() {
               </div>
             </div>
 
-            {/* Tile 3: Recommended Actions */}
             <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
@@ -611,7 +566,6 @@ export default function AegisDashboard() {
               </button>
             </div>
 
-            {/* Tile 4: Recent Alerts */}
             <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
@@ -653,7 +607,6 @@ export default function AegisDashboard() {
             </div>
           </div>
 
-          {/* 6. MISSION EVENT TIMELINE STRIP */}
           <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex items-center justify-between shrink-0 font-mono text-xs">
             <div className="flex items-center gap-2">
               <Clock size={15} className="text-[#00e5ff]" />
@@ -686,7 +639,6 @@ export default function AegisDashboard() {
 }
 
 // Subcomponents
-
 function NavItem({ icon, label, active, badge, onClick }) {
   return (
     <div
