@@ -105,19 +105,21 @@ export default function AegisDashboard() {
     }
   };
 
-  const runAnalysis = async () => {
+ 
+
+    const runAnalysis = async () => {
     setIsAnalyzing(true);
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080';
+    // Removes trailing slash if present
+    const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 
     try {
       let response;
       if (dataSource === 'default') {
-        // Fetch NASA P-1 inference
-        response = await fetch(`${API_BASE}/api/analyze/default`);
-        if (!response.ok) {
-          response = await fetch(`${API_BASE}/run-inference?channel=${selectedChannel.replace('Channel ', '')}`);
-        }
+        // Exact endpoint for NASA data
+        const channelCode = selectedChannel.replace('Channel ', '');
+        response = await fetch(`${API_BASE}/run-inference?channel=${channelCode}`);
       } else {
+        // Exact endpoint for Custom file upload
         const file = fileInputRef.current?.files?.[0];
         if (!file) {
           alert('Please select a valid CSV or Parquet file first.');
@@ -126,38 +128,30 @@ export default function AegisDashboard() {
         }
         const formData = new FormData();
         formData.append('file', file);
-
-        response = await fetch(`${API_BASE}/api/analyze/custom`, {
+        response = await fetch(`${API_BASE}/upload-telemetry`, {
           method: 'POST',
           body: formData,
         });
-
-        if (!response.ok) {
-          response = await fetch(`${API_BASE}/upload-telemetry`, {
-            method: 'POST',
-            body: formData,
-          });
-        }
       }
 
       if (!response.ok) {
-        throw new Error(`Inference call failed with status ${response.status}`);
+        const errText = await response.text();
+        throw new Error(`Server returned ${response.status}: ${errText}`);
       }
 
       const res = await response.json();
 
-      // Adaptively format predictions across different backend return keys
       const rawRecords = res.predictions || res.telemetry || res.data || [];
       if (Array.isArray(rawRecords) && rawRecords.length > 0) {
         const formatted = rawRecords.map((p, idx) => {
-          const rawVal = p.value !== undefined ? p.value : p.channel_1 !== undefined ? p.channel_1 : p.signal || 0;
+          const rawVal = p.value ?? p.channel_1 ?? p.signal ?? 0;
           const scaledSignal = parseFloat((rawVal * 50 + 50).toFixed(2));
           const isAnomaly = p.Predicted_Anomaly === 1 || p.anomaly === 1 || p.is_anomaly === true || (p.score && p.score > 0.8);
           const groundTruth = p.Ground_Truth === 1 || p.ground_truth === 1;
 
           return {
-            time: `T+${p.timestep !== undefined ? p.timestep : idx}`,
-            utc: p.utc || `T+${p.timestep !== undefined ? p.timestep : idx}`,
+            time: `T+${p.timestep ?? idx}`,
+            utc: p.utc || `T+${p.timestep ?? idx}`,
             signal: scaledSignal,
             anomalyVal: isAnomaly ? scaledSignal : null,
             refAnomaly: groundTruth ? 80 : null,
@@ -166,6 +160,24 @@ export default function AegisDashboard() {
         });
 
         setRawChartData(formatted);
+        const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
+        
+        setMetrics((prev) => ({
+          ...prev,
+          anomalyScore: formatted.length > 0 ? (anomalyCount / formatted.length).toFixed(2) : '0.00',
+          affectedSubsystem: dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER',
+          detectedSequences: `${anomalyCount}/${anomalyCount > 0 ? anomalyCount : 1}`,
+        }));
+      } else {
+        alert('Backend request succeeded, but no telemetry data was found in the response.');
+      }
+    } catch (err) {
+      console.error('Inference Failed:', err);
+      alert(`Inference failed: ${err.message}\n\nCheck F12 Developer Tools -> Network tab for details.`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
         // Update live metrics dynamically based on payload
         const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
