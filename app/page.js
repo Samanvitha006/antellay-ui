@@ -160,8 +160,11 @@ export default function AegisDashboard() {
         setRawChartData(formatted);
         const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
         
-      setMetrics((prev) => ({
+        setMetrics((prev) => ({
           ...prev,
+          // Add this new line to pull the battery level from Python:
+          battery: { ...prev.battery, val: res.predictive_health?.battery_level || '68%' },
+          
           anomalyScore: formatted.length > 0 ? (anomalyCount / formatted.length).toFixed(2) : '0.00',
           affectedSubsystem: res.root_cause?.primary_suspect || (dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER'),
           primarySuspect: res.root_cause?.primary_suspect || 'Battery / Power Subsystem',
