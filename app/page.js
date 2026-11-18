@@ -160,10 +160,12 @@ export default function AegisDashboard() {
         setRawChartData(formatted);
         const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
         
-        setMetrics((prev) => ({
+      setMetrics((prev) => ({
           ...prev,
           anomalyScore: formatted.length > 0 ? (anomalyCount / formatted.length).toFixed(2) : '0.00',
-          affectedSubsystem: dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER',
+          affectedSubsystem: res.root_cause?.primary_suspect || (dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER'),
+          primarySuspect: res.root_cause?.primary_suspect || 'Battery / Power Subsystem',
+          timeToCritical: res.predictive_health?.time_to_critical || '~ 7h 21m',
           detectedSequences: `${anomalyCount}/${anomalyCount > 0 ? anomalyCount : 1}`,
         }));
       } else {
@@ -473,7 +475,7 @@ export default function AegisDashboard() {
                 <div className="mt-2.5">
                   <div className="text-[10px] text-slate-400 uppercase font-mono">Primary Suspected Cause</div>
                   <div className="text-xs font-bold text-red-400 flex items-center gap-1.5 mt-0.5">
-                    <AlertTriangle size={13} /> Battery / Power Subsystem
+                    <AlertTriangle size={13} /> {metrics.primarySuspect || 'Battery / Power Subsystem'}
                   </div>
                 </div>
                 <div className="mt-2.5 flex flex-col gap-1 text-[11px] font-mono text-slate-400">
@@ -521,7 +523,7 @@ export default function AegisDashboard() {
                     </div>
                     <div className="flex justify-between gap-2">
                       <span className="text-slate-400">Time to Critical:</span>
-                      <span className="text-amber-400 font-bold">~ 7h 21m</span>
+                      <span className="text-amber-400 font-bold">{metrics.timeToCritical || '~ 7h 21m'}</span>
                     </div>
                   </div>
                 </div>
