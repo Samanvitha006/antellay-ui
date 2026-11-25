@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Activity,
   Radio,
@@ -10,198 +10,203 @@ import {
   Bell,
   ChevronRight,
   Clock,
-  FileText,
-  Settings,
   Database,
   AlertTriangle,
   UploadCloud,
   RefreshCw,
   Play,
-  Battery,
-  Thermometer,
-  Sun,
-  Wifi,
-  Zap,
-  HelpCircle,
+  Info,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import {
   AreaChart,
   Area,
-  LineChart,
   Line,
   CartesianGrid,
   XAxis,
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
 } from 'recharts';
 
+const DEFAULT_CHANNELS = [
+  'P-1', 'S-1', 'E-1', 'E-2', 'E-3', 'T-1', 'T-2', 'G-1', 'D-1', 'A-1', 'M-1', 'F-1',
+];
+
+type PredictionPoint = {
+  timestep: number;
+  value: number;
+  baseline_value?: number;
+  Predicted_Anomaly: number;
+  Anomaly_Score: number;
+  Severity?: string;
+  ground_truth?: number;
+};
+
+type TriageItem = {
+  timestep: number;
+  value: number;
+  baseline_value?: number;
+  Anomaly_Score: number;
+  Severity?: string;
+  Supporting_Evidence?: string;
+  Hypothesis?: string;
+  Triage_Action?: string;
+  ground_truth?: number;
+};
+
+type ApiResponse = {
+  status: string;
+  data_source: {
+    type: string;
+    label: string;
+    is_live: boolean;
+    disclosure: string;
+  };
+  metrics: {
+    precision: number | null;
+    recall: number | null;
+    f1: number | null;
+    fpr: number | null;
+    detected_sequences: number | null;
+    total_sequences: number | null;
+    mean_detection_delay: number | string | null;
+  };
+  predictions: PredictionPoint[];
+  root_cause: {
+    status: string;
+    disclaimer: string;
+    primary_suspect: string;
+    evidence: string[];
+    triage_action: string;
+  };
+  triage_log: TriageItem[];
+  predictive_health: {
+    available: boolean;
+    battery_level: string;
+    time_to_critical: string;
+    risk_level: string;
+    limitation: string;
+  };
+};
+
 export default function AegisDashboard() {
-  // Navigation & Interactive UI state
-  const [activeTab, setActiveTab] = useState('anomaly');
-  const [timeRange, setTimeRange] = useState('6H');
-  const [selectedChannel, setSelectedChannel] = useState('Channel P-1');
-  const [dataSource, setDataSource] = useState('default');
+  const [activeTab, setActiveTab] = useState('overview');
+  const [channels, setChannels] = useState<string[]>(DEFAULT_CHANNELS);
+  const [selectedChannel, setSelectedChannel] = useState('P-1');
+  const [detectorType, setDetectorType] = useState('Isolation Forest (Unsupervised ML)');
+  const [thresholdPct, setThresholdPct] = useState(1.0);
+  const [dataSourceMode, setDataSourceMode] = useState<'benchmark' | 'custom'>('benchmark');
   const [fileName, setFileName] = useState('');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const fileInputRef = useRef(null);
 
-  // Default synthetic curve fallback matching the NASA P-1 telemetry signature
-  const defaultCurve = useMemo(() => {
-    return Array.from({ length: 48 }, (_, i) => {
-      const timeStep = 1400 + i * 2;
-      let baseVal = 70 + Math.sin(i / 3) * 15 - (i > 24 ? (i - 24) * 1.8 : 0);
-      let isAnomaly = (i >= 14 && i <= 17) || (i >= 38 && i <= 41);
-      let val = isAnomaly ? baseVal + 38 : baseVal;
-      return {
-        time: `T+${timeStep}`,
-        utc: `Apr 26, ${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 === 0 ? '00' : '30'}`,
-        signal: parseFloat(val.toFixed(2)),
-        anomalyVal: isAnomaly ? parseFloat(val.toFixed(2)) : null,
-        refAnomaly: i >= 13 && i <= 18 ? 80 : null,
-        score: isAnomaly ? 0.97 : 0.04,
-      };
-    });
-  }, []);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [apiData, setApiData] = useState<ApiResponse | null>(null);
 
-  const [rawChartData, setRawChartData] = useState(defaultCurve);
-  const [metrics, setMetrics] = useState({
-    battery: { val: '68%', change: '+2.4%', up: true },
-    temperature: { val: '31.4 °C', change: '↓ 1.2%', up: false },
-    solar: { val: '428 W', change: '+3.8%', up: true },
-    signal: { val: '-68 dBm', change: '+1.5%', up: true },
-    cpu: { val: '43%', change: '↓ 0.8%', up: false },
-    voltage: { val: '27.8 V', change: '+1.9%', up: true },
-    anomalyScore: '0.97',
-    confidence: '94%',
-    affectedSubsystem: 'POWER',
-    f1: '45.7%',
-    detectedSequences: '3/3',
-    detectionDelay: '12.3 steps',
-  });
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 
-  // Dynamic timeframe filter for the active chart
-  const displayedChartData = useMemo(() => {
-    if (!rawChartData || rawChartData.length === 0) return [];
-    const len = rawChartData.length;
-    switch (timeRange) {
-      case '1H':
-        return rawChartData.slice(Math.max(0, len - 12));
-      case '6H':
-        return rawChartData.slice(Math.max(0, len - 24));
-      case '24H':
-        return rawChartData.slice(Math.max(0, len - 36));
-      case '7D':
-      default:
-        return rawChartData;
-    }
-  }, [rawChartData, timeRange]);
+  // Fetch available channels on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/channels`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.channels?.length) setChannels(data.channels);
+      })
+      .catch(() => {
+        // Keep DEFAULT_CHANNELS fallback silently
+      });
+  }, [API_BASE]);
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (file) {
       setFileName(file.name);
+      setErrorMsg(null);
     }
   };
 
   const runAnalysis = async () => {
-    setIsAnalyzing(true);
-    // Removes trailing slash if present
-    const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
+    setIsLoading(true);
+    setErrorMsg(null);
 
     try {
-      let response;
-      if (dataSource === 'default') {
-        // Exact endpoint for NASA data
-        const channelCode = selectedChannel.replace('Channel ', '');
-        response = await fetch(`${API_BASE}/run-inference?channel=${channelCode}`);
+      let response: Response;
+
+      if (dataSourceMode === 'benchmark') {
+        const params = new URLSearchParams({
+          channel: selectedChannel,
+          detector_type: detectorType,
+          threshold_pct: String(thresholdPct),
+        });
+        response = await fetch(`${API_BASE}/run-inference?${params.toString()}`);
       } else {
-        // Exact endpoint for Custom file upload
         const file = fileInputRef.current?.files?.[0];
         if (!file) {
-          alert('Please select a valid CSV or Parquet file first.');
-          setIsAnalyzing(false);
+          setErrorMsg('Please select a valid .csv or .parquet telemetry file first.');
+          setIsLoading(false);
           return;
         }
         const formData = new FormData();
         formData.append('file', file);
-        response = await fetch(`${API_BASE}/upload-telemetry`, {
+        const params = new URLSearchParams({
+          detector_type: detectorType,
+          threshold_pct: String(thresholdPct),
+        });
+        response = await fetch(`${API_BASE}/upload-telemetry?${params.toString()}`, {
           method: 'POST',
           body: formData,
         });
       }
 
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Server returned ${response.status}: ${errText}`);
+        const errBody = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(errBody.detail || `Server returned HTTP ${response.status}`);
       }
 
-      const res = await response.json();
-
-      const rawRecords = res.predictions || res.telemetry || res.data || [];
-      if (Array.isArray(rawRecords) && rawRecords.length > 0) {
-        const formatted = rawRecords.map((p, idx) => {
-          const rawVal = p.value ?? p.channel_1 ?? p.signal ?? 0;
-          const scaledSignal = parseFloat((rawVal * 50 + 50).toFixed(2));
-          const isAnomaly = p.Predicted_Anomaly === 1 || p.anomaly === 1 || p.is_anomaly === true || (p.score && p.score > 0.8);
-          const groundTruth = p.Ground_Truth === 1 || p.ground_truth === 1;
-
-          return {
-            time: `T+${p.timestep ?? idx}`,
-            utc: p.utc || `T+${p.timestep ?? idx}`,
-            signal: scaledSignal,
-            anomalyVal: isAnomaly ? scaledSignal : null,
-            refAnomaly: groundTruth ? 80 : null,
-            score: p.score !== undefined ? parseFloat(p.score.toFixed(2)) : isAnomaly ? 0.98 : 0.05,
-          };
-        });
-
-        setRawChartData(formatted);
-        const anomalyCount = formatted.filter((item) => item.anomalyVal !== null).length;
-        
-        setMetrics((prev) => ({
-          ...prev,
-          // Add this new line to pull the battery level from Python:
-          battery: { ...prev.battery, val: res.predictive_health?.battery_level || '68%' },
-          
-          anomalyScore: formatted.length > 0 ? (anomalyCount / formatted.length).toFixed(2) : '0.00',
-          affectedSubsystem: res.root_cause?.primary_suspect || (dataSource === 'custom' ? 'PAYLOAD / SENSOR' : 'POWER'),
-          primarySuspect: res.root_cause?.primary_suspect || 'Battery / Power Subsystem',
-          timeToCritical: res.predictive_health?.time_to_critical || '~ 7h 21m',
-          detectedSequences: `${anomalyCount}/${anomalyCount > 0 ? anomalyCount : 1}`,
-        }));
-      } else {
-        alert('Backend request succeeded, but no telemetry data was found in the response.');
-      }
-    } catch (err) {
-      console.error('Inference Failed:', err);
-      alert(`Inference failed: ${err.message}\n\nCheck F12 Developer Tools -> Network tab for details.`);
+      const json: ApiResponse = await response.json();
+      setApiData(json);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error during inference.';
+      setErrorMsg(msg);
     } finally {
-      setIsAnalyzing(false);
+      setIsLoading(false);
     }
   };
 
+  // Format chart data without distorting raw telemetry values
+  const chartData = useMemo(() => {
+    if (!apiData?.predictions) return [];
+    return apiData.predictions.map((p) => ({
+      step: `T+${p.timestep}`,
+      value: Number(p.value.toFixed(4)),
+      baseline: p.baseline_value !== undefined ? Number(p.baseline_value.toFixed(4)) : null,
+      anomalyVal: p.Predicted_Anomaly === 1 ? Number(p.value.toFixed(4)) : null,
+      score: Number(p.Anomaly_Score.toFixed(4)),
+      severity: p.Severity || 'Nominal',
+      groundTruth: p.ground_truth === 1,
+    }));
+  }, [apiData]);
+
+  const fmtPct = (val: number | null | undefined) =>
+    val === null || val === undefined ? 'N/A' : `${(val * 100).toFixed(1)}%`;
+
   const navItems = [
     { id: 'overview', label: 'Overview', icon: <Activity size={15} /> },
-    { id: 'explorer', label: 'Telemetry Explorer', icon: <Radio size={15} /> },
     { id: 'anomaly', label: 'AI Anomaly Detection', icon: <ShieldAlert size={15} /> },
     { id: 'rca', label: 'Root Cause Analysis', icon: <Search size={15} /> },
     { id: 'health', label: 'Predictive Health', icon: <Cpu size={15} /> },
-    { id: 'alerts', label: 'Alerts & Incidents', icon: <Bell size={15} />, badge: '2' },
-    { id: 'recommendations', label: 'Recommendations', icon: <ChevronRight size={15} /> },
-    { id: 'timeline', label: 'Mission Timeline', icon: <Clock size={15} /> },
-    { id: 'reports', label: 'Reports & Exports', icon: <FileText size={15} /> },
-    { id: 'settings', label: 'Settings', icon: <Settings size={15} /> },
+    { id: 'alerts', label: 'Triage & Alerts', icon: <Bell size={15} />, badge: apiData?.triage_log?.length || 0 },
   ];
 
   return (
-    <div className="flex h-screen w-full bg-[#030712] text-slate-300 font-sans overflow-hidden select-none">
-      {/* LEFT DOCK NAVIGATION */}
-      <aside className="w-56 bg-[#060D1A] border-r border-[#152338] flex flex-col justify-between shrink-0">
+    <div className="flex flex-col md:flex-row min-h-screen w-full bg-[#030712] text-slate-300 font-sans">
+      {/* LEFT SIDEBAR */}
+      <aside className="w-full md:w-56 bg-[#060D1A] border-b md:border-b-0 md:border-r border-[#152338] flex flex-col justify-between shrink-0">
         <div>
           <div className="p-4 border-b border-[#152338] flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#0055ff] to-[#00e5ff] flex items-center justify-center font-black text-black text-base shadow-[0_0_12px_rgba(0,229,255,0.4)]">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#0055ff] to-[#00e5ff] flex items-center justify-center font-black text-black text-base">
               A
             </div>
             <div>
@@ -210,510 +215,398 @@ export default function AegisDashboard() {
             </div>
           </div>
 
-          <nav className="p-2 flex flex-col gap-1 text-xs">
+          <nav className="p-2 flex flex-row md:flex-col gap-1 overflow-x-auto text-xs">
             {navItems.map((item) => (
-              <NavItem
+              <button
                 key={item.id}
-                icon={item.icon}
-                label={item.label}
-                active={activeTab === item.id}
-                badge={item.badge}
                 onClick={() => setActiveTab(item.id)}
-              />
+                className={`flex items-center justify-between px-3 py-2 rounded-lg whitespace-nowrap transition-colors ${
+                  activeTab === item.id
+                    ? 'bg-[#00e5ff]/10 text-[#00e5ff] border-l-2 border-[#00e5ff] font-medium'
+                    : 'text-slate-400 hover:text-white hover:bg-[#0B1526]'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  {item.icon}
+                  {item.label}
+                </span>
+                {item.badge ? (
+                  <span className="ml-2 text-[10px] font-mono px-1.5 bg-red-900/60 border border-red-700 text-red-300 rounded font-bold">
+                    {item.badge}
+                  </span>
+                ) : null}
+              </button>
             ))}
           </nav>
         </div>
 
-        <div className="p-3 border-t border-[#152338]">
-          <div className="bg-[#0A1628] border border-[#1E3A5F] p-2.5 rounded-lg flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-            <div>
-              <div className="text-[9px] text-slate-400 uppercase tracking-wider font-mono">SYSTEM MODE</div>
-              <div className="text-xs text-white font-semibold">RESEARCH PROTOTYPE</div>
-            </div>
+        <div className="hidden md:block p-3 border-t border-[#152338]">
+          <div className="bg-[#0A1628] border border-[#1E3A5F] p-2.5 rounded-lg">
+            <div className="text-[9px] text-slate-400 uppercase font-mono">PLATFORM STATUS</div>
+            <div className="text-xs text-white font-semibold mt-0.5">NON-LIVE / ANALYTICS</div>
           </div>
-          <div className="text-[9px] text-slate-500 font-mono mt-2 text-center">ANTELLAY SPACE · AEGIS V2</div>
         </div>
       </aside>
 
-      {/* MAIN MISSION CENTER */}
-      <div className="flex-1 flex flex-col h-full min-w-0">
-        <header className="h-12 bg-[#060D1A] border-b border-[#152338] px-4 flex items-center justify-between text-xs font-mono shrink-0">
-          <div className="flex items-center gap-2 text-slate-400 text-[11px]">
+      {/* MAIN CONTENT */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* TOP HEADER */}
+        <header className="bg-[#060D1A] border-b border-[#152338] px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+          <div className="flex items-center gap-2 text-slate-400">
             <span>Mission Intelligence</span>
             <span>/</span>
-            <span className="text-white font-medium">Mission AE-01</span>
+            <span className="text-white font-medium">AEGIS Telemetry Analytics</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-[#0A1628] border border-[#1E3A5F] px-2.5 py-1 rounded text-slate-300">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 bg-[#0A1628] border border-[#1E3A5F] px-2.5 py-1 rounded text-slate-300">
               <Database size={13} className="text-[#00e5ff]" />
-              <span>NASA SMAP · {selectedChannel}</span>
-            </div>
-            <div className="flex items-center gap-1.5 bg-amber-950/40 border border-amber-600/50 text-amber-300 px-2.5 py-1 rounded text-[11px]">
-              <AlertTriangle size={13} />
-              <span>WARNING</span>
-            </div>
-            <div className="bg-[#0A1628] border border-[#1E3A5F] text-slate-300 px-2.5 py-1 rounded text-[11px]">
-              DEMO MODE
-            </div>
-            <button className="text-slate-400 hover:text-white p-1">
-              <Search size={15} />
-            </button>
-            <button className="text-slate-400 hover:text-white p-1 relative">
-              <Bell size={15} />
-              <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-[#00e5ff] rounded-full"></span>
-            </button>
-            <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-500 border border-cyan-300 flex items-center justify-center text-[10px] text-white font-bold">
-              OP
-            </div>
+              {apiData ? apiData.data_source.label : 'No Dataset Loaded'}
+            </span>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3.5 custom-scrollbar">
-          <div className="flex justify-between items-end border-b border-[#152338] pb-3 shrink-0">
+        <main className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+          {/* CONTROLS BAR */}
+          <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-4 flex flex-col lg:flex-row lg:items-end justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[10px] font-mono tracking-wider px-2 py-0.5 rounded bg-blue-950/60 border border-blue-800 text-blue-300 uppercase">
-                  AEGIS V2 · TELEMETRY ANALYTICS
-                </span>
-              </div>
-              <h1 className="text-2xl font-bold tracking-tight text-white">MISSION INTELLIGENCE</h1>
+              <h1 className="text-xl font-bold text-white tracking-tight">TELEMETRY ANOMALY INTELLIGENCE</h1>
               <p className="text-xs text-slate-400 mt-0.5">
-                AI-powered satellite health monitoring, anomaly diagnosis and predictive mission insights.
+                Run benchmark validation or upload custom CSV/Parquet telemetry for leak-free anomaly detection.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="flex bg-[#081220] border border-[#152338] p-0.5 rounded-lg text-xs font-mono">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+              {/* Source Switch */}
+              <div className="flex bg-[#081220] border border-[#152338] p-0.5 rounded-lg">
                 <button
-                  onClick={() => setDataSource('default')}
-                  className={`px-3 py-1 rounded transition-colors ${
-                    dataSource === 'default' ? 'bg-[#132438] text-white font-medium' : 'text-slate-400 hover:text-white'
+                  onClick={() => setDataSourceMode('benchmark')}
+                  className={`px-3 py-1.5 rounded ${
+                    dataSourceMode === 'benchmark' ? 'bg-[#132438] text-white font-semibold' : 'text-slate-400'
                   }`}
                 >
-                  NASA SMAP (P-1)
+                  NASA BENCHMARK
                 </button>
                 <button
-                  onClick={() => setDataSource('custom')}
-                  className={`px-3 py-1 rounded transition-colors ${
-                    dataSource === 'custom' ? 'bg-[#132438] text-white font-medium' : 'text-slate-400 hover:text-white'
+                  onClick={() => setDataSourceMode('custom')}
+                  className={`px-3 py-1.5 rounded ${
+                    dataSourceMode === 'custom' ? 'bg-[#132438] text-white font-semibold' : 'text-slate-400'
                   }`}
                 >
-                  CUSTOM INGEST
+                  CUSTOM UPLOAD
                 </button>
               </div>
 
-              {dataSource === 'custom' && (
+              {/* Channel or File Input */}
+              {dataSourceMode === 'benchmark' ? (
+                <select
+                  value={selectedChannel}
+                  onChange={(e) => setSelectedChannel(e.target.value)}
+                  className="bg-[#0A1628] border border-[#1E3A5F] rounded px-2.5 py-1.5 text-slate-200 outline-none"
+                >
+                  {channels.map((ch) => (
+                    <option key={ch} value={ch}>
+                      Channel {ch}
+                    </option>
+                  ))}
+                </select>
+              ) : (
                 <>
                   <input
                     type="file"
                     ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleFileUpload}
+                    onChange={handleFileChange}
                     accept=".csv,.parquet"
+                    className="hidden"
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="border border-dashed border-[#1E3A5F] hover:border-[#00e5ff] text-slate-300 hover:text-[#00e5ff] px-2.5 py-1 rounded text-xs flex items-center gap-1.5 font-mono transition-colors"
+                    className="border border-dashed border-[#1E3A5F] hover:border-[#00e5ff] text-slate-300 px-3 py-1.5 rounded flex items-center gap-1.5"
                   >
-                    <UploadCloud size={13} />
-                    <span>{fileName || 'SELECT CSV'}</span>
+                    <UploadCloud size={14} />
+                    <span>{fileName || 'SELECT CSV / PARQUET'}</span>
                   </button>
                 </>
               )}
 
+              {/* Model Selector */}
+              <select
+                value={detectorType}
+                onChange={(e) => setDetectorType(e.target.value)}
+                className="bg-[#0A1628] border border-[#1E3A5F] rounded px-2.5 py-1.5 text-slate-200 outline-none"
+              >
+                <option value="Isolation Forest (Unsupervised ML)">Isolation Forest</option>
+                <option value="Rolling Robust Baseline (Statistical)">Rolling Robust Baseline</option>
+              </select>
+
+              {/* Threshold */}
+              <label className="flex items-center gap-1.5 bg-[#0A1628] border border-[#1E3A5F] rounded px-2.5 py-1.5 text-slate-300">
+                <span>Tail %:</span>
+                <input
+                  type="number"
+                  min={0.5}
+                  max={10}
+                  step={0.5}
+                  value={thresholdPct}
+                  onChange={(e) => setThresholdPct(Number(e.target.value))}
+                  className="w-12 bg-transparent text-[#00e5ff] font-bold outline-none"
+                />
+              </label>
+
+              {/* Run Button */}
               <button
                 onClick={runAnalysis}
-                disabled={isAnalyzing}
-                className="bg-[#00e5ff] hover:bg-[#00cce6] disabled:bg-slate-700 text-black font-semibold px-3.5 py-1.5 rounded text-xs font-mono flex items-center gap-1.5 shadow-[0_0_12px_rgba(0,229,255,0.3)] transition-all cursor-pointer"
+                disabled={isLoading}
+                className="bg-[#00e5ff] hover:bg-[#00cce6] disabled:bg-slate-700 text-black font-bold px-4 py-1.5 rounded flex items-center gap-1.5 cursor-pointer"
               >
-                {isAnalyzing ? <RefreshCw size={13} className="animate-spin" /> : <Play size={13} fill="currentColor" />}
-                <span>{isAnalyzing ? 'INFERRING...' : 'RUN INFERENCE'}</span>
+                {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} fill="currentColor" />}
+                <span>{isLoading ? 'ANALYZING...' : 'RUN INFERENCE'}</span>
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-6 gap-2.5 shrink-0">
-            <SparklineCard icon={<Battery size={14} className="text-cyan-400" />} label="BATTERY" value={metrics.battery.val} delta={metrics.battery.change} up={metrics.battery.up} color="#00e5ff" />
-            <SparklineCard icon={<Thermometer size={14} className="text-indigo-400" />} label="TEMPERATURE" value={metrics.temperature.val} delta={metrics.temperature.change} up={metrics.temperature.up} color="#818cf8" />
-            <SparklineCard icon={<Sun size={14} className="text-amber-400" />} label="SOLAR POWER" value={metrics.solar.val} delta={metrics.solar.change} up={metrics.solar.up} color="#fbbf24" />
-            <SparklineCard icon={<Wifi size={14} className="text-teal-400" />} label="SIGNAL STRENGTH" value={metrics.signal.val} delta={metrics.signal.change} up={metrics.signal.up} color="#2dd4bf" />
-            <SparklineCard icon={<Cpu size={14} className="text-blue-400" />} label="CPU LOAD" value={metrics.cpu.val} delta={metrics.cpu.change} up={metrics.cpu.up} color="#60a5fa" />
-            <SparklineCard icon={<Zap size={14} className="text-cyan-400" />} label="VOLTAGE" value={metrics.voltage.val} delta={metrics.voltage.change} up={metrics.voltage.up} color="#00e5ff" />
-          </div>
-
-          <div className="grid grid-cols-12 gap-3 shrink-0">
-            <div className="col-span-8 bg-[#060D1A] border border-[#152338] rounded-xl p-3.5 flex flex-col">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <h3 className="text-sm font-semibold text-white tracking-wide uppercase">TELEMETRY SIGNAL ANALYSIS</h3>
-                  <p className="text-[11px] text-slate-400 font-mono">{selectedChannel} · Historical signal & anomaly intervals</p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className="flex bg-[#0A1628] border border-[#152338] rounded text-[11px] font-mono p-0.5">
-                    {['1H', '6H', '24H', '7D'].map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => setTimeRange(t)}
-                        className={`px-2 py-0.5 rounded transition-colors ${
-                          timeRange === t ? 'bg-[#16273e] text-white font-bold' : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {t}
-                      </button>
-                    ))}
-                  </div>
-
-                  <select
-                    value={selectedChannel}
-                    onChange={(e) => setSelectedChannel(e.target.value)}
-                    className="bg-[#0A1628] border border-[#152338] rounded px-2 py-0.5 text-[11px] font-mono text-slate-300 outline-none cursor-pointer"
-                  >
-                    <option value="Channel P-1">Channel P-1 (Power)</option>
-                    <option value="Channel V-2">Channel V-2 (Voltage)</option>
-                    <option value="Channel T-4">Channel T-4 (Thermal)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4 text-[10px] font-mono text-slate-400 mb-2">
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 bg-[#00e5ff]"></span> Normal Signal</span>
-                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pink-500 shadow-[0_0_6px_#ec4899]"></span> Detected Anomaly</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 border-t border-dashed border-red-500"></span> Spec Threshold</span>
-              </div>
-
-              <div className="h-64 w-full relative">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={displayedChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="telemetryGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#00e5ff" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="#00e5ff" stopOpacity={0.0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="2 2" stroke="#0E1A2B" vertical={false} />
-                    <XAxis dataKey="utc" stroke="#334155" fontSize={9} tickLine={false} />
-                    <YAxis stroke="#334155" fontSize={9} tickLine={false} domain={['auto', 'auto']} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <ReferenceLine y={85} stroke="#ef4444" strokeDasharray="3 3" />
-                    <Area type="monotone" dataKey="signal" stroke="#00e5ff" strokeWidth={1.5} fillOpacity={1} fill="url(#telemetryGrad)" />
-                    <Line type="monotone" dataKey="anomalyVal" stroke="#ec4899" strokeWidth={2.5} dot={{ r: 4, fill: '#ec4899' }} />
-                  </AreaChart>
-                </ResponsiveContainer>
+          {/* DATA PROVENANCE DISCLOSURE BANNER */}
+          {apiData && (
+            <div className="bg-blue-950/30 border border-blue-800/60 rounded-lg px-3.5 py-2.5 flex items-start gap-2.5 text-xs">
+              <Info size={16} className="text-[#00e5ff] shrink-0 mt-0.5" />
+              <div>
+                <span className="font-mono font-bold text-white uppercase mr-2">
+                  [{apiData.data_source.type.replace('_', ' ')}]
+                </span>
+                <span className="text-slate-300">{apiData.data_source.disclosure}</span>
               </div>
             </div>
+          )}
 
-            <div className="col-span-4 bg-[#060D1A] border border-[#152338] rounded-xl p-3.5 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-2 border-b border-[#152338]">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-white tracking-wide uppercase">
-                    <ShieldAlert size={14} className="text-red-400" />
-                    <span>AI ANOMALY DETECTION</span>
-                  </div>
-                  <span className="text-[9px] font-mono bg-red-950/60 border border-red-800 text-red-400 px-1.5 py-0.5 rounded font-bold uppercase">
-                    CRITICAL
-                  </span>
-                </div>
+          {/* ERROR STATE */}
+          {errorMsg && (
+            <div className="bg-red-950/40 border border-red-800 rounded-lg p-3.5 flex items-center gap-2.5 text-xs text-red-200">
+              <XCircle size={16} className="text-red-400 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
-                <div className="mt-3 bg-red-950/20 border border-red-900/40 rounded-lg p-2.5 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></div>
+          {/* EMPTY STATE */}
+          {!apiData && !isLoading && !errorMsg && (
+            <div className="bg-[#060D1A] border border-dashed border-[#1E3A5F] rounded-xl p-10 text-center flex flex-col items-center gap-2">
+              <Radio size={28} className="text-[#00e5ff]" />
+              <div className="text-sm font-semibold text-white">Ready for Telemetry Analysis</div>
+              <p className="text-xs text-slate-400 max-w-md">
+                Select a NASA Telemanom benchmark channel or upload a custom CSV/Parquet file above, then click{' '}
+                <strong className="text-white">RUN INFERENCE</strong> to populate real metrics, anomaly charts, and
+                root-cause hypotheses.
+              </p>
+            </div>
+          )}
+
+          {/* POPULATED DASHBOARD */}
+          {apiData && (
+            <>
+              {/* REAL EVALUATION METRICS ROW */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                <MetricCard label="PRECISION" value={fmtPct(apiData.metrics.precision)} />
+                <MetricCard label="RECALL" value={fmtPct(apiData.metrics.recall)} />
+                <MetricCard label="F1 SCORE" value={fmtPct(apiData.metrics.f1)} highlight />
+                <MetricCard label="FALSE POS RATE" value={fmtPct(apiData.metrics.fpr)} />
+                <MetricCard
+                  label="SEQ CAUGHT"
+                  value={
+                    apiData.metrics.detected_sequences !== null
+                      ? `${apiData.metrics.detected_sequences} / ${apiData.metrics.total_sequences}`
+                      : 'N/A'
+                  }
+                />
+                <MetricCard
+                  label="MEAN DELAY"
+                  value={
+                    apiData.metrics.mean_detection_delay !== null && apiData.metrics.mean_detection_delay !== 'N/A'
+                      ? `${apiData.metrics.mean_detection_delay} steps`
+                      : 'N/A'
+                  }
+                />
+              </div>
+
+              {/* TELEMETRY CHART */}
+              {(activeTab === 'overview' || activeTab === 'anomaly') && (
+                <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
-                      <div className="text-xs font-bold text-red-200 uppercase">ANOMALY DETECTED</div>
-                      <div className="text-[10px] text-red-400 font-mono">Telemetry signature mismatch</div>
+                      <h2 className="text-sm font-semibold text-white uppercase">Telemetry Signal & Anomaly Detection</h2>
+                      <p className="text-[11px] text-slate-400 font-mono">
+                        Observed signal vs. rolling robust baseline (last {chartData.length} timesteps)
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-4 text-[10px] font-mono text-slate-400">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-0.5 bg-[#00e5ff]" /> Observed
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-0.5 border-t border-dashed border-slate-400" /> Baseline
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-pink-500" /> Predicted Anomaly
+                      </span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 bg-red-900/40 border border-red-700/60 text-red-300 rounded font-bold">
-                    HIGH
-                  </span>
-                </div>
 
-                <div className="mt-3 flex flex-col gap-2 font-mono text-xs">
-                  <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="text-slate-400 text-[11px]">Primary Symptom</span>
-                    <span className="text-white font-medium">Battery voltage abnormal</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="text-slate-400 text-[11px]">Anomaly Score</span>
-                    <span className="text-[#00e5ff] font-bold">{metrics.anomalyScore}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="text-slate-400 text-[11px]">Model Confidence</span>
-                    <span className="text-white font-bold">{metrics.confidence}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="text-slate-400 text-[11px]">Affected Subsystem</span>
-                    <span className="text-amber-400 font-bold">{metrics.affectedSubsystem}</span>
+                  <div className="h-72 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="sigGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#00e5ff" stopOpacity={0.25} />
+                            <stop offset="95%" stopColor="#00e5ff" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="2 2" stroke="#0E1A2B" vertical={false} />
+                        <XAxis dataKey="step" stroke="#475569" fontSize={10} tickLine={false} />
+                        <YAxis stroke="#475569" fontSize={10} tickLine={false} domain={['auto', 'auto']} />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Area type="monotone" dataKey="value" stroke="#00e5ff" strokeWidth={1.5} fill="url(#sigGrad)" />
+                        <Line type="monotone" dataKey="baseline" stroke="#94a3b8" strokeDasharray="3 3" strokeWidth={1.2} dot={false} />
+                        <Line type="monotone" dataKey="anomalyVal" stroke="#ec4899" strokeWidth={0} dot={{ r: 4, fill: '#ec4899' }} />
+                      </AreaChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
+              )}
 
-                <div className="mt-3 h-14 bg-[#030712] rounded border border-[#152338] p-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={displayedChartData.slice(-18)}>
-                      <Line type="monotone" dataKey="signal" stroke="#ec4899" strokeWidth={1.5} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setActiveTab('anomaly')}
-                className="mt-3 w-full bg-[#0A1628] hover:bg-[#12233C] border border-[#1E3A5F] text-slate-200 hover:text-white py-1.5 rounded-lg text-xs font-mono flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <span>VIEW ANOMALY DETAILS</span>
-                <ChevronRight size={13} />
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-4 gap-3 shrink-0">
-            <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
-                  <span className="text-xs font-semibold text-white tracking-wide uppercase">ROOT CAUSE ANALYSIS</span>
-                  <span className="text-[9px] font-mono text-cyan-400 border border-cyan-800 bg-cyan-950/40 px-1 rounded">SUSPECTED</span>
-                </div>
-                <div className="mt-2.5">
-                  <div className="text-[10px] text-slate-400 uppercase font-mono">Primary Suspected Cause</div>
-                  <div className="text-xs font-bold text-red-400 flex items-center gap-1.5 mt-0.5">
-                    <AlertTriangle size={13} /> {metrics.primarySuspect || 'Battery / Power Subsystem'}
-                  </div>
-                </div>
-                <div className="mt-2.5 flex flex-col gap-1 text-[11px] font-mono text-slate-400">
-                  <div className="flex justify-between items-center">
-                    <span>→ Battery voltage decreasing</span>
-                    <span className="text-red-400 font-bold">↓ 4.2%</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span>→ Power consumption increasing</span>
-                    <span className="text-amber-400 font-bold">↑ 6.8%</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span>→ Solar generation decreasing</span>
-                    <span className="text-red-400 font-bold">↓ 7.3%</span>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setActiveTab('rca')}
-                className="mt-2.5 w-full bg-[#0A1628] hover:bg-[#12233C] border border-[#1E3A5F] text-slate-300 py-1 rounded text-[11px] font-mono flex items-center justify-center gap-1 cursor-pointer transition-colors"
-              >
-                <span>INVESTIGATE ROOT CAUSE</span>
-                <ChevronRight size={12} />
-              </button>
-            </div>
-
-            <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
-                  <span className="text-xs font-semibold text-white tracking-wide uppercase">PREDICTIVE HEALTH</span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                </div>
-                <div className="mt-2 flex items-center gap-3">
-                  <div className="w-16 h-16 rounded-full border-4 border-[#00e5ff] border-t-transparent flex items-center justify-center font-bold text-sm text-white font-mono shadow-[0_0_10px_rgba(0,229,255,0.2)]">
-                    {metrics.battery.val}
-                  </div>
-                  <div className="text-[11px] font-mono flex flex-col gap-1">
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-400">Current Battery:</span>
-                      <span className="text-white font-bold">{metrics.battery.val}</span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-400">Critical Threshold:</span>
-                      <span className="text-red-400 font-bold">40%</span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-400">Time to Critical:</span>
-                      <span className="text-amber-400 font-bold">{metrics.timeToCritical || '~ 7h 21m'}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-2 pt-2 border-t border-[#152338] flex justify-between items-center text-[10px] font-mono">
-                  <span className="text-slate-400">Battery Trend (Next 24 Hours)</span>
-                  <span className="text-red-400 font-bold bg-red-950/40 px-1 border border-red-800 rounded">HIGH RISK</span>
-                </div>
-              </div>
-              <div className="h-6 w-full bg-[#030712] rounded border border-[#152338] mt-1 overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-cyan-500 to-amber-500 w-[68%]"></div>
-              </div>
-            </div>
-
-            <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
-                  <span className="text-xs font-semibold text-white tracking-wide uppercase">RECOMMENDED ACTIONS</span>
-                  <HelpCircle size={13} className="text-slate-500" />
-                </div>
-                <div className="mt-2 flex flex-col gap-1.5 text-[11px]">
-                  <div className="p-1.5 bg-[#091524] border border-[#1B2F48] rounded hover:border-[#00e5ff] cursor-pointer flex items-start gap-1.5 transition-colors">
-                    <ChevronRight size={13} className="text-[#00e5ff] mt-0.5 shrink-0" />
+              {/* LOWER PANELS: RCA + PREDICTIVE HEALTH + TRIAGE */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* ROOT CAUSE ANALYSIS */}
+                {(activeTab === 'overview' || activeTab === 'rca') && (
+                  <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-4 flex flex-col justify-between">
                     <div>
-                      <div className="text-white font-medium">Reduce non-critical payload activity</div>
-                      <div className="text-[10px] text-slate-400">Conserves power & reduces thermal stress</div>
+                      <div className="flex items-center justify-between pb-2 border-b border-[#152338]">
+                        <span className="text-xs font-semibold text-white uppercase">Root Cause Analysis</span>
+                        <span className="text-[9px] font-mono text-amber-300 border border-amber-700 bg-amber-950/40 px-1.5 py-0.5 rounded uppercase">
+                          AI HYPOTHESIS
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-amber-300/90 font-mono mt-2">{apiData.root_cause.disclaimer}</p>
+
+                      <div className="mt-3">
+                        <div className="text-[10px] text-slate-400 uppercase font-mono">Suspected Subsystem</div>
+                        <div className="text-xs font-bold text-red-400 flex items-center gap-1.5 mt-1">
+                          <AlertTriangle size={14} />
+                          {apiData.root_cause.primary_suspect}
+                        </div>
+                      </div>
+
+                      <ul className="mt-3 space-y-1.5 text-[11px] font-mono text-slate-300">
+                        {apiData.root_cause.evidence.map((ev, i) => (
+                          <li key={i} className="bg-[#0A1628] border border-[#152338] rounded p-2">
+                            {ev}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="mt-3 pt-2 border-t border-[#152338] text-[11px] text-cyan-300 font-mono">
+                      {apiData.root_cause.triage_action}
                     </div>
                   </div>
-                  <div className="p-1.5 bg-[#091524] border border-[#1B2F48] rounded hover:border-[#00e5ff] cursor-pointer flex items-start gap-1.5 transition-colors">
-                    <ChevronRight size={13} className="text-[#00e5ff] mt-0.5 shrink-0" />
+                )}
+
+                {/* PREDICTIVE HEALTH */}
+                {(activeTab === 'overview' || activeTab === 'health') && (
+                  <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-4 flex flex-col justify-between">
                     <div>
-                      <div className="text-white font-medium">Enter power conservation mode</div>
-                      <div className="text-[10px] text-slate-400">Optimizes bus health for eclipse entry</div>
+                      <div className="flex items-center justify-between pb-2 border-b border-[#152338]">
+                        <span className="text-xs font-semibold text-white uppercase">Predictive Health</span>
+                        <span
+                          className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                            apiData.predictive_health.available
+                              ? 'text-emerald-300 border-emerald-700 bg-emerald-950/40'
+                              : 'text-slate-400 border-slate-700 bg-slate-900'
+                          }`}
+                        >
+                          {apiData.predictive_health.available ? 'COMPUTED' : 'UNAVAILABLE'}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 space-y-2.5 text-xs font-mono">
+                        <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
+                          <span className="text-slate-400">Current Battery / SoC:</span>
+                          <span className="text-white font-bold">{apiData.predictive_health.battery_level}</span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
+                          <span className="text-slate-400">Est. Time to Critical:</span>
+                          <span className="text-amber-400 font-bold">{apiData.predictive_health.time_to_critical}</span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b border-[#0F1B2D]">
+                          <span className="text-slate-400">Risk Classification:</span>
+                          <span className="text-cyan-400 font-bold">{apiData.predictive_health.risk_level}</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => alert('Command dispatched to orbital telemetry bus.')}
-                className="mt-2 w-full bg-cyan-950/40 hover:bg-cyan-900/60 border border-[#00e5ff]/50 text-[#00e5ff] py-1 rounded text-[11px] font-mono font-semibold transition-colors cursor-pointer"
-              >
-                OPERATOR APPROVAL REQUIRED
-              </button>
-            </div>
 
-            <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-1.5 border-b border-[#152338]">
-                  <span className="text-xs font-semibold text-white tracking-wide uppercase">RECENT ALERTS</span>
-                  <span
-                    onClick={() => setActiveTab('alerts')}
-                    className="text-[10px] font-mono text-[#00e5ff] cursor-pointer hover:underline"
-                  >
-                    View All &gt;
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-col gap-1.5 text-[11px] font-mono">
-                  <div className="flex items-center justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="flex items-center gap-1.5 text-red-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span> Channel P-1
-                    </span>
-                    <span className="text-slate-300 text-[10px]">Voltage abnormal</span>
-                    <span className="text-red-400 border border-red-800 bg-red-950/60 px-1 rounded text-[9px]">Open</span>
+                    <p className="mt-3 text-[10px] font-mono text-slate-400 bg-[#0A1628] border border-[#152338] rounded p-2">
+                      Limitation: {apiData.predictive_health.limitation}
+                    </p>
                   </div>
-                  <div className="flex items-center justify-between py-1 border-b border-[#0F1B2D]">
-                    <span className="flex items-center gap-1.5 text-amber-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Channel V-2
-                    </span>
-                    <span className="text-slate-300 text-[10px]">Temp rising (31.4°C)</span>
-                    <span className="text-amber-400 border border-amber-800 bg-amber-950/60 px-1 rounded text-[9px]">Investigating</span>
+                )}
+
+                {/* TRIAGE & ALERTS LOG */}
+                {(activeTab === 'overview' || activeTab === 'alerts') && (
+                  <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-4 flex flex-col">
+                    <div className="flex items-center justify-between pb-2 border-b border-[#152338]">
+                      <span className="text-xs font-semibold text-white uppercase">Detected Anomaly Triage Log</span>
+                      <Clock size={14} className="text-[#00e5ff]" />
+                    </div>
+
+                    {apiData.triage_log.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center py-6 text-xs text-slate-400 gap-1.5">
+                        <CheckCircle2 size={20} className="text-emerald-400" />
+                        <span>No anomalies detected above threshold.</span>
+                      </div>
+                    ) : (
+                      <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-1 text-[11px] font-mono">
+                        {apiData.triage_log.map((item, idx) => (
+                          <div key={idx} className="bg-[#0A1628] border border-[#152338] rounded p-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-white font-bold">Timestep T+{item.timestep}</span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800 text-red-300">
+                                {item.Severity || 'Anomaly'} · Score {item.Anomaly_Score}
+                              </span>
+                            </div>
+                            {item.Supporting_Evidence && (
+                              <div className="text-[10px] text-slate-400 mt-1">{item.Supporting_Evidence}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center justify-between py-1">
-                    <span className="flex items-center gap-1.5 text-cyan-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-500"></span> Channel H-3
-                    </span>
-                    <span className="text-slate-300 text-[10px]">Signal degradation</span>
-                    <span className="text-cyan-400 border border-cyan-800 bg-cyan-950/60 px-1 rounded text-[9px]">Resolved</span>
-                  </div>
-                </div>
+                )}
               </div>
-              <div className="text-[10px] font-mono text-slate-500 text-center">
-                F1-SCORE: <span className="text-[#00e5ff]">{metrics.f1}</span> · SEQ CAUGHT: <span className="text-white">{metrics.detectedSequences}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3 flex items-center justify-between shrink-0 font-mono text-xs">
-            <div className="flex items-center gap-2">
-              <Clock size={15} className="text-[#00e5ff]" />
-              <div>
-                <div className="text-white font-bold text-xs uppercase">MISSION EVENT TIMELINE</div>
-                <div className="text-[10px] text-slate-500">Sequential telemetry anomaly progression</div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-6">
-              <TimelinePoint time="13:00" label="Telemetry Received" active />
-              <div className="w-8 h-[1px] bg-[#1E3A5F]"></div>
-              <TimelinePoint time="13:02" label="Anomaly Detected" alert />
-              <div className="w-8 h-[1px] bg-[#1E3A5F]"></div>
-              <TimelinePoint time="13:03" label="Root Cause Identified" />
-              <div className="w-8 h-[1px] bg-[#1E3A5F]"></div>
-              <TimelinePoint time="13:04" label="Severity Classified" />
-              <div className="w-8 h-[1px] bg-[#1E3A5F]"></div>
-              <TimelinePoint time="13:05" label="Recommendation Generated" />
-            </div>
-
-            <div className="text-[10px] text-slate-500">
-              Mean Delay: <span className="text-white font-bold">{metrics.detectionDelay}</span>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        </main>
       </div>
     </div>
   );
 }
 
-// Subcomponents
-function NavItem({ icon, label, active, badge, onClick }) {
+function MetricCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div
-      onClick={onClick}
-      className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-        active
-          ? 'bg-[#00e5ff]/10 text-[#00e5ff] border-l-2 border-[#00e5ff] font-medium'
-          : 'text-slate-400 hover:text-white hover:bg-[#0B1526]'
-      }`}
-    >
-      <div className="flex items-center gap-2.5">
-        {icon}
-        <span className="text-xs">{label}</span>
-      </div>
-      {badge && (
-        <span className="text-[10px] font-mono px-1.5 py-0.2 bg-red-900/60 border border-red-700 text-red-300 rounded font-bold">
-          {badge}
-        </span>
-      )}
+    <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3">
+      <div className="text-[10px] font-mono text-slate-400 uppercase">{label}</div>
+      <div className={`text-lg font-bold font-mono mt-1 ${highlight ? 'text-[#00e5ff]' : 'text-white'}`}>{value}</div>
     </div>
   );
 }
 
-function SparklineCard({ icon, label, value, delta, up, color }) {
-  const sampleData = useMemo(() => Array.from({ length: 12 }, () => ({ val: 20 + Math.random() * 20 })), []);
-
-  return (
-    <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-2.5 flex flex-col justify-between">
-      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
-        <span className="flex items-center gap-1.5">
-          {icon} {label}
-        </span>
-        <span className={up ? 'text-emerald-400 font-bold' : 'text-slate-400'}>{delta}</span>
-      </div>
-      <div className="text-lg font-bold text-white font-mono tracking-tight">{value}</div>
-      <div className="h-7 w-full mt-1">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={sampleData}>
-            <Line type="monotone" dataKey="val" stroke={color} strokeWidth={1.5} dot={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function TimelinePoint({ time, label, active, alert }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div
-        className={`w-2 h-2 rounded-full ${
-          alert ? 'bg-red-500 shadow-[0_0_8px_#ef4444]' : active ? 'bg-[#00e5ff] shadow-[0_0_8px_#00e5ff]' : 'bg-slate-600'
-        }`}
-      ></div>
-      <div>
-        <div className="text-[11px] font-bold text-white">{time}</div>
-        <div className="text-[9px] text-slate-400">{label}</div>
-      </div>
-    </div>
-  );
-}
-
-function CustomTooltip({ active, payload }) {
+function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Record<string, unknown> }> }) {
   if (active && payload && payload.length) {
-    const data = payload[0].payload;
+    const d = payload[0].payload;
     return (
       <div className="bg-[#0A1628] border border-[#1E3A5F] p-2.5 rounded-lg shadow-xl text-xs font-mono">
-        <div className="text-slate-400 text-[10px] mb-1">{data.utc}</div>
-        <div className="text-[#00e5ff] font-bold">Value: {data.signal}</div>
-        {data.anomalyVal && <div className="text-red-400 font-bold mt-1">Anomaly Score: {data.score} (Critical)</div>}
+        <div className="text-slate-400 text-[10px] mb-1">{String(d.step)}</div>
+        <div className="text-[#00e5ff] font-bold">Observed: {String(d.value)}</div>
+        {d.baseline !== null && <div className="text-slate-300">Baseline: {String(d.baseline)}</div>}
+        <div className="text-slate-300">Score: {String(d.score)}</div>
+        {d.anomalyVal !== null && <div className="text-pink-400 font-bold mt-1">Flagged: {String(d.severity)}</div>}
       </div>
     );
   }
