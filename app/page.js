@@ -8,7 +8,6 @@ import {
   Search,
   Cpu,
   Bell,
-  ChevronRight,
   Clock,
   Database,
   AlertTriangle,
@@ -34,77 +33,20 @@ const DEFAULT_CHANNELS = [
   'P-1', 'S-1', 'E-1', 'E-2', 'E-3', 'T-1', 'T-2', 'G-1', 'D-1', 'A-1', 'M-1', 'F-1',
 ];
 
-type PredictionPoint = {
-  timestep: number;
-  value: number;
-  baseline_value?: number;
-  Predicted_Anomaly: number;
-  Anomaly_Score: number;
-  Severity?: string;
-  ground_truth?: number;
-};
-
-type TriageItem = {
-  timestep: number;
-  value: number;
-  baseline_value?: number;
-  Anomaly_Score: number;
-  Severity?: string;
-  Supporting_Evidence?: string;
-  Hypothesis?: string;
-  Triage_Action?: string;
-  ground_truth?: number;
-};
-
-type ApiResponse = {
-  status: string;
-  data_source: {
-    type: string;
-    label: string;
-    is_live: boolean;
-    disclosure: string;
-  };
-  metrics: {
-    precision: number | null;
-    recall: number | null;
-    f1: number | null;
-    fpr: number | null;
-    detected_sequences: number | null;
-    total_sequences: number | null;
-    mean_detection_delay: number | string | null;
-  };
-  predictions: PredictionPoint[];
-  root_cause: {
-    status: string;
-    disclaimer: string;
-    primary_suspect: string;
-    evidence: string[];
-    triage_action: string;
-  };
-  triage_log: TriageItem[];
-  predictive_health: {
-    available: boolean;
-    battery_level: string;
-    time_to_critical: string;
-    risk_level: string;
-    limitation: string;
-  };
-};
-
 export default function AegisDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
-  const [channels, setChannels] = useState<string[]>(DEFAULT_CHANNELS);
+  const [channels, setChannels] = useState(DEFAULT_CHANNELS);
   const [selectedChannel, setSelectedChannel] = useState('P-1');
   const [detectorType, setDetectorType] = useState('Isolation Forest (Unsupervised ML)');
   const [thresholdPct, setThresholdPct] = useState(1.0);
-  const [dataSourceMode, setDataSourceMode] = useState<'benchmark' | 'custom'>('benchmark');
+  const [dataSourceMode, setDataSourceMode] = useState('benchmark');
   const [fileName, setFileName] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [apiData, setApiData] = useState<ApiResponse | null>(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [apiData, setApiData] = useState(null);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef(null);
   const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 
   // Fetch available channels on mount
@@ -119,7 +61,7 @@ export default function AegisDashboard() {
       });
   }, [API_BASE]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
       setFileName(file.name);
@@ -132,7 +74,7 @@ export default function AegisDashboard() {
     setErrorMsg(null);
 
     try {
-      let response: Response;
+      let response;
 
       if (dataSourceMode === 'benchmark') {
         const params = new URLSearchParams({
@@ -165,9 +107,9 @@ export default function AegisDashboard() {
         throw new Error(errBody.detail || `Server returned HTTP ${response.status}`);
       }
 
-      const json: ApiResponse = await response.json();
+      const json = await response.json();
       setApiData(json);
-    } catch (err: unknown) {
+    } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error during inference.';
       setErrorMsg(msg);
     } finally {
@@ -189,7 +131,7 @@ export default function AegisDashboard() {
     }));
   }, [apiData]);
 
-  const fmtPct = (val: number | null | undefined) =>
+  const fmtPct = (val) =>
     val === null || val === undefined ? 'N/A' : `${(val * 100).toFixed(1)}%`;
 
   const navItems = [
@@ -588,7 +530,7 @@ export default function AegisDashboard() {
   );
 }
 
-function MetricCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function MetricCard({ label, value, highlight }) {
   return (
     <div className="bg-[#060D1A] border border-[#152338] rounded-xl p-3">
       <div className="text-[10px] font-mono text-slate-400 uppercase">{label}</div>
@@ -597,7 +539,7 @@ function MetricCard({ label, value, highlight }: { label: string; value: string;
   );
 }
 
-function CustomTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Record<string, unknown> }> }) {
+function CustomTooltip({ active, payload }) {
   if (active && payload && payload.length) {
     const d = payload[0].payload;
     return (
